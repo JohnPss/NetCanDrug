@@ -99,7 +99,7 @@ print(tcga_brca_se)
 
 # --- 6. Save processed object ---
 cat("\nSTEP 4: Saving processed object for future use...\n")
-output_path <- file.path(work_dir, "data/processed/")
+output_path <- file.path(project_root, "data", "processed")
 
 # Create directory if it doesn't exist
 if (!dir.exists(output_path)) {
