@@ -19,10 +19,38 @@ library(edgeR)
 library(dplyr)
 
 # --- 2. Define directories and load data ---
-# Get the script directory and set project root
-# --- 2. Define directories and load data ---
-# Caminho manual absoluto para o arquivo .RData
-data_file <- "/home/johnpss/Desktop/NetCanDrugTest1/NetCanDrugTest3/data/processed/tcga_brca_prepared_counts.RData"
+## Robust project root detection helper (reuses the same approach as other scripts)
+find_project_root <- function(start_path = NULL) {
+  if (is.null(start_path)) {
+    args <- commandArgs(trailingOnly = FALSE)
+    file_arg <- "--file="
+    idx <- grep(file_arg, args)
+    if (length(idx) > 0) {
+      start_path <- normalizePath(sub(file_arg, "", args[idx[1]]))
+    } else if (!is.null(sys.frames()[[1]]$ofile)) {
+      start_path <- normalizePath(sys.frames()[[1]]$ofile)
+    } else if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+      path <- rstudioapi::getActiveDocumentContext()$path
+      if (nzchar(path)) start_path <- normalizePath(path)
+    } else {
+      start_path <- normalizePath(getwd())
+    }
+  }
+
+  current <- normalizePath(dirname(start_path))
+  root_markers <- c("config.py", ".git", "requirements.txt", "src")
+  while (TRUE) {
+    files <- list.files(current, all.files = TRUE)
+    if (any(root_markers %in% files)) return(normalizePath(current))
+    parent <- dirname(current)
+    if (parent == current) break
+    current <- parent
+  }
+  return(normalizePath(dirname(start_path)))
+}
+
+project_root <- find_project_root()
+data_file <- file.path(project_root, "data", "processed", "tcga_brca_prepared_counts.RData")
 
 if (!file.exists(data_file)) stop("Arquivo .RData não encontrado! Rode primeiro o Script 01.")
 load(data_file)

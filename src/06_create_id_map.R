@@ -15,8 +15,38 @@ if (!requireNamespace("biomaRt", quietly = TRUE)) {
 
 library(biomaRt)
 
-# Get the script directory and set project root
-setwd("/home/johnpss/Desktop/NetCanDrugTest1/NetCanDrugTest3")
+# Auto-detect project root and set working directory (works with Rscript / RStudio)
+find_project_root <- function(start_path = NULL) {
+    if (is.null(start_path)) {
+        args <- commandArgs(trailingOnly = FALSE)
+        file_arg <- "--file="
+        idx <- grep(file_arg, args)
+        if (length(idx) > 0) {
+            start_path <- normalizePath(sub(file_arg, "", args[idx[1]]))
+        } else if (!is.null(sys.frames()[[1]]$ofile)) {
+            start_path <- normalizePath(sys.frames()[[1]]$ofile)
+        } else if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+            path <- rstudioapi::getActiveDocumentContext()$path
+            if (nzchar(path)) start_path <- normalizePath(path)
+        } else {
+            start_path <- normalizePath(getwd())
+        }
+    }
+
+    current <- normalizePath(dirname(start_path))
+    root_markers <- c("config.py", ".git", "requirements.txt", "src")
+    while (TRUE) {
+        files <- list.files(current, all.files = TRUE)
+        if (any(root_markers %in% files)) return(normalizePath(current))
+        parent <- dirname(current)
+        if (parent == current) break
+        current <- parent
+    }
+    return(normalizePath(dirname(start_path)))
+}
+
+project_root <- find_project_root()
+setwd(project_root)
 
 print("--- Connecting to Ensembl via biomaRt ---")
 # Use Ensembl database for human genes

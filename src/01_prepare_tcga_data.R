@@ -17,11 +17,45 @@
 library(TCGAbiolinks)
 library(SummarizedExperiment)
 
-# --- 2. Define working directory ---
-# Get the script directory and set project root
-script_dir <- getwd()
-work_dir <- dirname(script_dir)
-setwd(work_dir)
+# --- 2. Robust project root detection and set working directory ---
+# find_project_root(): determine the repository root by inspecting the
+# script path (Rscript --file, rstudioapi, or getwd()) and walking up the
+# directory tree looking for repository markers.
+find_project_root <- function(start_path = NULL) {
+  # Determine a sensible start path if not provided
+  if (is.null(start_path)) {
+    args <- commandArgs(trailingOnly = FALSE)
+    file_arg <- "--file="
+    idx <- grep(file_arg, args)
+    if (length(idx) > 0) {
+      start_path <- normalizePath(sub(file_arg, "", args[idx[1]]))
+    } else if (!is.null(sys.frames()[[1]]$ofile)) {
+      start_path <- normalizePath(sys.frames()[[1]]$ofile)
+    } else if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+      path <- rstudioapi::getActiveDocumentContext()$path
+      if (nzchar(path)) start_path <- normalizePath(path)
+    } else {
+      start_path <- normalizePath(getwd())
+    }
+  }
+
+  current <- normalizePath(dirname(start_path))
+  root_markers <- c("config.py", ".git", "requirements.txt", "src")
+
+  while (TRUE) {
+    files <- list.files(current, all.files = TRUE)
+    if (any(root_markers %in% files)) return(normalizePath(current))
+    parent <- dirname(current)
+    if (parent == current) break
+    current <- parent
+  }
+
+  # Fallback: parent of script
+  return(normalizePath(dirname(start_path)))
+}
+
+project_root <- find_project_root()
+setwd(project_root)
 
 # --- 3. QUERY Step: Define exactly which data we want ---
 cat("STEP 1: Creating GDC query...\n")
