@@ -180,3 +180,44 @@ If you use this pipeline, please cite the relevant databases:
 ## License
 
 This project is for research purposes.
+
+
+
+## 📥 Required Data Files
+
+Download the following files and place them in `data/raw/`:
+
+### 1. STRING Database
+```bash
+# Download from: https://string-db.org/cgi/download
+# Files needed:
+# - 9606.protein.links.v12.0.txt.gz (rename to string_links.txt after decompression)
+# - 9606.protein.aliases.v12.0.txt.gz (decompress only)
+
+cd data/raw
+wget https://stringdb-downloads.org/download/protein.links.v12.0/9606.protein.links.v12.0.txt.gz
+gunzip 9606.protein.links.v12.0.txt.gz
+mv 9606.protein.links.v12.0.txt string_links.txt
+
+wget https://stringdb-downloads.org/download/protein.aliases.v12.0/9606.protein.aliases.v12.0.txt.gz
+gunzip 9606.protein.aliases.v12.0.txt.gz
+```
+
+### 2. DGIdb Interactions
+```bash
+# Download from: https://www.dgidb.org/downloads
+cd data/raw
+wget https://www.dgidb.org/data/monthly_tsvs/2024-Jan/interactions.tsv
+```
+
+### 3. Reactome Pathways
+```bash
+# Download from: https://reactome.org/download-data
+cd data/raw
+wget https://reactome.org/download/current/UniProt2Reactome.txt
+# Process this file to create reactome_gene_pathway_map.csv
+# (Or use the preprocessing script if provided)
+```
+
+### 4. TCGA Data
+No manual download needed - Script 01 automatically downloads from GDC.
