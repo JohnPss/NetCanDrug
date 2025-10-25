@@ -76,11 +76,29 @@ print(query_brca)
 cat("\nSTEP 2: Downloading data (this may take a while)... \n")
 # TCGAbiolinks is smart: it will check files in the directory
 # and only download what's missing
-GDCdownload(
-  query = query_brca,
-  method = "api",
-  directory = "data/raw/GDCdata" # Output directory
-)
+gdc_dir <- file.path(project_root, "data", "raw", "GDCdata")
+# Ensure the download directory exists before calling GDCdownload
+if (!dir.exists(gdc_dir)) {
+  dir.create(gdc_dir, recursive = TRUE, showWarnings = FALSE)
+}
+
+## Run GDCdownload from inside the download directory so any temporary
+## chunk files are created there (prevents tarballs appearing in repo root)
+old_wd <- getwd()
+setwd(gdc_dir)
+tryCatch({
+  GDCdownload(
+    query = query_brca,
+    method = "api",
+    directory = "." # run inside gdc_dir
+  )
+}, error = function(e) {
+  # restore wd and rethrow
+  setwd(old_wd)
+  stop(e)
+})
+# restore working dir to project root for subsequent operations
+setwd(old_wd)
 cat("Download completed.\n")
 
 
@@ -90,7 +108,7 @@ cat("\nSTEP 3: Preparing data in a SummarizedExperiment object...\n")
 # avoiding previous errors
 tcga_brca_se <- GDCprepare(
   query = query_brca,
-  directory = "data/raw/GDCdata"
+  directory = gdc_dir
 )
 
 cat("Preparation completed. Object structure:\n")
