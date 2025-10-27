@@ -32,7 +32,7 @@ STRING_ALIASES_FILE = os.path.join(RAW_DATA_DIR, "9606.protein.aliases.v12.0.txt
 DGIDB_FILE = os.path.join(RAW_DATA_DIR, "interactions.tsv")
 
 # Reactome pathway mapping
-PATHWAY_MAP_FILE = os.path.join(PROCESSED_DATA_DIR, "reactome_gene_pathway_map.csv")
+PATHWAY_MAP_FILE = os.path.join(RAW_DATA_DIR, "reactome_gene_pathway_map.csv")
 
 # ID mapping file
 ID_MAP_FILE = os.path.join(PROCESSED_DATA_DIR, "uniprot_to_genesymbol.csv")
