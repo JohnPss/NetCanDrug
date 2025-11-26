@@ -80,12 +80,11 @@ PATHWAY_FDR_THRESHOLD = 0.05
 # Script 08: NetCanDrug Score Calculation
 # Score weights for final ranking
 SCORE_WEIGHTS = {
-    'topology': 0.4,
-    'pathway': 0.3,
-    'expression': 0.2,
-    'clinical': 0.1
+    'topology': 0.40,
+    'pathway': 0.35,
+    'expression': 0.25,
+    'clinical': 0.00     # AUMENTAR de 0.1
 }
-
 # Topology score components weights
 TOPOLOGY_DEGREE_WEIGHT = 0.6
 TOPOLOGY_BETWEENNESS_WEIGHT = 0.4
