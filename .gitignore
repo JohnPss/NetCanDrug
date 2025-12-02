@@ -10,6 +10,7 @@ data/*.txt
 data/*.tsv
 data/raw
 data/processed
+results/*
 
 
 __pycache__/
