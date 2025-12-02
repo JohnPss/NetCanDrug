@@ -168,7 +168,7 @@ def main():
         es_raw = float(np.mean(expression_scores)) if expression_scores else 0.0
 
         # Clinical score placeholder
-        cs_raw = 1.0
+        cs_raw = 0.0
 
         results.append({
             'drug_name': drug,
