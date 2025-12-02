@@ -17,6 +17,7 @@ from sklearn.metrics import roc_auc_score, average_precision_score, roc_curve, a
 import networkx as nx
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.utils import resample
 
 # Reproducibility
 RANDOM_SEED = 42
@@ -76,37 +77,87 @@ def ensure_df_column(df: pd.DataFrame, col: str, default=np.nan):
 
 # ---------- SECTION 1: LOAD DATA & PREPARE ----------
 
+# ---------- SECTION 1: LOAD DATA & PREPARE ----------
+
+def recalculate_score_without_clinical(df: pd.DataFrame):
+    """
+    Recalculates the final score using ONLY biological components
+    (Topology, Pathway, Expression) and EXCLUDING Clinical Score/FDA status
+    to prevent data leakage during validation.
+    """
+    print("[PREP] Recalculating scores explicitly excluding Clinical Component...")
+    
+    # Ensure columns exist and fill NaNs
+    cols = ['topology_score_norm', 'pathway_score_norm', 'expression_score_norm']
+    for c in cols:
+        ensure_df_column(df, c, 0.0)
+        
+    # Validation Weights (Must sum to 1.0 or be consistent with Ablation 'Full Model')
+    # Ajuste estes pesos conforme sua configuração 'Full Model' na Ablation
+    W_TOPO = 0.60
+    W_PATH = 0.25
+    W_EXPR = 0.15
+    
+    df['Validation_Score'] = (
+        W_TOPO * df['topology_score_norm'] +
+        W_PATH * df['pathway_score_norm'] +
+        W_EXPR * df['expression_score_norm']
+    )
+    return df
+
 def load_data():
     print("[LOAD] Reading input files...")
     df_ranking = pd.read_csv(config.FINAL_RANKING_FILE)
     df_drug_targets = pd.read_csv(config.DRUG_TARGET_FILE)
     df_deg = pd.read_csv(config.DEG_FILE)
-    # Additional optional files used in other sections will be loaded lazily
-    # Normalize drug names in relevant tables
+    
+    # Normalize drug names
     for df in [df_ranking, df_drug_targets]:
         if 'drug_name' in df.columns:
             df['drug_name'] = normalize_drug_names(df['drug_name'])
+            
+    # CRITICAL: Create the Clean Validation Score
+    df_ranking = recalculate_score_without_clinical(df_ranking)
+    
     return df_ranking, df_drug_targets, df_deg
 
 
 # ---------- SECTION 2: VALIDATION (TRAIN/TEST, Precision@K) ----------
 
 def train_test_validation(df_ranking: pd.DataFrame, fda_list=FDA_BREAST_DRUGS_LIST):
-    print("\n[VALIDATION] Train/test split & Precision@K on held-out FDA drugs")
-    # create train/test split of FDA drugs to avoid circular validation
+    print("\n[VALIDATION] Train/test split & Precision@K on HELD-OUT FDA drugs")
+    
+    # create train/test split
     train_drugs, test_drugs = train_test_split(fda_list, test_size=0.4, random_state=RANDOM_SEED)
+    
+    # Normalização para garantir match
+    test_drugs_norm = [d.upper().replace(r'[^A-Z0-9]', '') for d in test_drugs]
+    
     df = df_ranking.copy()
-    df['is_test_fda'] = df['drug_name'].isin([d.upper().replace(r'[^A-Z0-9]', '') for d in test_drugs])
-    ks = []
+    # Usar Validation_Score se existir (criado na etapa anterior), senão usa NetCanDrug_Score
+    score_col = 'Validation_Score' if 'Validation_Score' in df.columns else 'NetCanDrug_Score'
+    df = df.sort_values(score_col, ascending=False)
+    
+    df['is_hit'] = df['drug_name'].isin(test_drugs_norm)
+    
     test_results = []
     for k in [10, 20, 30, 50, 100]:
         top_k = df.head(k)
-        hits = int(sum(top_k['is_test_fda']))
+        hits = int(top_k['is_hit'].sum())
         precision = hits / k
-        test_results.append({'K': k, 'Precision': precision, 'Hits': hits})
+        
+        test_results.append({
+            'Metric_Type': 'Held-Out (Test Set)', # <--- NOVA COLUNA
+            'K': k, 
+            'Precision': precision, 
+            'Hits': hits,
+            'Total_Positives_In_Set': len(test_drugs)
+        })
+        
     test_results_df = pd.DataFrame(test_results)
-    test_results_df.to_csv(RESULTS_DIR / "validation_test_set.csv", index=False)
+    test_results_df.to_csv(RESULTS_DIR / "validation_heldout.csv", index=False)
     print(test_results_df.to_string(index=False))
+    
     return train_drugs, test_drugs, test_results_df
 
 
@@ -120,7 +171,7 @@ def ablation_study(df_ranking: pd.DataFrame):
     ensure_df_column(df, 'pathway_score_norm', 0.0)
     ensure_df_column(df, 'expression_score_norm', 0.0)
     configurations = {
-        'Full Model': {'w_topo': 0.40, 'w_path': 0.35, 'w_expr': 0.25},
+        'Full Model': {'w_topo': 0.60, 'w_path': 0.25, 'w_expr': 0.15},
         'No Topology': {'w_topo': 0.00, 'w_path': 0.60, 'w_expr': 0.40},
         'No Pathway': {'w_topo': 0.65, 'w_path': 0.00, 'w_expr': 0.35},
         'No Expression': {'w_topo': 0.55, 'w_path': 0.45, 'w_expr': 0.00},
@@ -181,21 +232,69 @@ def compute_baseline_expression(df_drug_targets: pd.DataFrame, df_deg: pd.DataFr
     return baseline_expr, baseline_precision_20
 
 
-# ---------- SECTION 5: RANDOM PERMUTATION TESTS ----------
+# ---------- SECTION 5 & 11: UNIFIED PERMUTATION TEST ----------
 
-def random_permutation_test(df_ranking: pd.DataFrame, test_drugs: list, n_iter=1000, top_k=20):
-    print(f"\n[PERMUTATION] Running random permutation test ({n_iter} iterations) for top {top_k}...")
-    all_drugs = df_ranking['drug_name'].dropna().unique()
+def run_permutation_test(df_ranking: pd.DataFrame, 
+                         target_drug_list: list, 
+                         mode_label: str,
+                         n_iter=10000, 
+                         top_k=20):
+    """
+    Generic permutation test.
+    mode_label: 'Held-Out' or 'Full_FDA' to label the output.
+    target_drug_list: The specific list of drugs to count as hits.
+    """
+    print(f"\n[PERMUTATION] Running test for: {mode_label} (Top {top_k}, {n_iter} iter)...")
+    
+    # Preparar dados do modelo
+    df = df_ranking.copy()
+    score_col = 'Validation_Score' if 'Validation_Score' in df.columns else 'NetCanDrug_Score'
+    df = df.sort_values(score_col, ascending=False)
+    
+    # Normalizar lista de alvo
+    target_set = set([d.upper().replace(r'[^A-Z0-9]', '') for d in target_drug_list])
+    all_drugs = df['drug_name'].dropna().unique()
+    
+    # 1. Calcular precisão real do modelo
+    top_k_drugs = df.head(top_k)['drug_name'].tolist()
+    real_hits = len(set(top_k_drugs).intersection(target_set))
+    model_precision = real_hits / top_k
+    
+    # 2. Definir seed local para garantir que rodar 2x dê o mesmo resultado
+    rng = np.random.RandomState(RANDOM_SEED)
+    
+    # 3. Permutações
     random_precisions = []
     for i in range(n_iter):
-        shuffled = np.random.choice(all_drugs, top_k, replace=False)
-        hits = len(set(shuffled).intersection(set(test_drugs)))
+        # Use 'rng.choice' ao invés de 'np.random.choice'
+        shuffled = rng.choice(all_drugs, top_k, replace=False)
+        hits = len(set(shuffled).intersection(target_set))
         random_precisions.append(hits / top_k)
+        
     random_precisions = np.array(random_precisions)
     mean_random = random_precisions.mean()
     std_random = random_precisions.std()
-    return random_precisions, mean_random, std_random
-
+    
+    # CORREÇÃO CRÍTICA DO P-VALOR:
+    # Conta quantas vezes o aleatório foi IGUAL ou MELHOR que o modelo
+    # Adiciona +1 no numerador e denominador para evitar p=0 (correção de Laplace/conservadora)
+    n_better_or_equal = (random_precisions >= model_precision).sum()
+    p_val = (n_better_or_equal + 1) / (n_iter + 1)
+    
+    results = {
+        'Metric_Type': mode_label,
+        'Top_K': top_k,
+        'Model_Precision': model_precision,
+        'Random_Mean': mean_random,
+        'Random_Std': std_random,
+        'Fold_Improvement': model_precision / mean_random if mean_random > 0 else np.inf,
+        'Empirical_p_value': p_val
+    }
+    
+    # Print rápido
+    print(f"   Model: {model_precision:.3f} | Random: {mean_random:.3f} | p-val: {p_val:.4f}")
+    
+    return pd.DataFrame([results])
 
 # ---------- SECTION 6: FINAL REPORT & COMPARISONS ----------
 
@@ -212,78 +311,94 @@ def generate_final_comparison(netcandrug_precision20, baseline_precision20, mean
     return comparison_df
 
 
-# ---------- SECTION 7: Siltuximab CASE STUDY (graph + pathways) ----------
+# ---------- SECTION 7: Siltuximab CASE STUDY (CORRIGIDO) ----------
 
-def siltuximab_case_study(ppi_graph_path="data/processed/ppi_tumor_network.graphml",
-                         drug_targets_path="data/processed/drug_target_mapping.csv",
-                         pathway_map_path="data/raw/reactome_gene_pathway_map.csv",
-                         id_map_path="data/processed/uniprot_to_genesymbol.csv"):
+def siltuximab_case_study(ppi_graph_path=config.TUMOR_NETWORK_FILE,
+                         drug_targets_path=config.DRUG_TARGET_FILE,
+                         pathway_map_path=config.PATHWAY_MAP_FILE,
+                         id_map_path=config.ID_MAP_FILE):
     print("\n[CASE STUDY] Siltuximab (IL6) - subgraph & pathways")
-    # Load network and mapping files
+    
+    if not os.path.exists(ppi_graph_path):
+        print("Graph file not found. Skipping case study.")
+        return None
+
+    # Load network
     G = nx.read_graphml(ppi_graph_path)
+    
+    # --- CORREÇÃO: Mapear Gene Symbol -> Node ID ---
+    # O grafo usa IDs do STRING (9606.ENSP...), mas o alvo é "IL6".
+    # Criamos um mapa reverso para encontrar o ID correto.
+    symbol_to_id = {}
+    for node, data in G.nodes(data=True):
+        # Tenta pegar 'gene_symbol', se falhar tenta 'name', se falhar usa o próprio ID
+        symbol = data.get('gene_symbol')
+        if symbol:
+            symbol_to_id[str(symbol).upper()] = node
+    
+    # Load targets
     drug_targets = pd.read_csv(drug_targets_path)
     drug_targets['drug_name'] = normalize_drug_names(drug_targets['drug_name'])
+    
     # get siltuximab targets
     siltuximab_targets = drug_targets[drug_targets['drug_name'] == 'SILTUXIMAB']['target_gene'].tolist()
     if len(siltuximab_targets) == 0:
         print("No Siltuximab targets found in mapping. Skipping case study.")
         return None
-    target_node = siltuximab_targets[0]
-    # Build 2-hop subgraph
-    subgraph_nodes = set([target_node])
-    for neighbor in G.neighbors(target_node):
-        subgraph_nodes.add(neighbor)
-    for neighbor in list(subgraph_nodes):
-        for second_neighbor in G.neighbors(neighbor):
-            subgraph_nodes.add(second_neighbor)
-    subgraph = G.subgraph(subgraph_nodes).copy()
-    print(f"Subgraph size: {subgraph.number_of_nodes()} nodes, {subgraph.number_of_edges()} edges")
-    # Visualize
-    plt.figure(figsize=(12, 10))
-    pos = nx.spring_layout(subgraph, k=0.5, iterations=50, seed=RANDOM_SEED)
-    node_colors = ['red' if str(node) == str(target_node) else 'lightblue' for node in subgraph.nodes()]
-    node_sizes = [3000 if str(node) == str(target_node) else 500 for node in subgraph.nodes()]
-    nx.draw_networkx_nodes(subgraph, pos, node_color=node_colors, node_size=node_sizes, alpha=0.8)
-    nx.draw_networkx_edges(subgraph, pos, alpha=0.3)
-    nx.draw_networkx_labels(subgraph, pos, font_size=8)
-    plt.title("Subgrafo 2-hop ao redor do alvo (Siltuximab target)", fontsize=14)
-    plt.axis('off')
-    plt.tight_layout()
-    plt.savefig(RESULTS_DIR / "siltuximab_subgraph.png", dpi=300)
-    plt.close()
-    # Map subgraph nodes to gene symbols via id_map and pathway map
-    pathway_map = pd.read_csv(pathway_map_path)
-    id_map = pd.read_csv(id_map_path)
-    uniprot_to_gene = pd.Series(id_map.gene_symbol.values, index=id_map.uniprot_id).to_dict()
-    pathway_map['gene_symbol'] = pathway_map['uniprot_id'].map(uniprot_to_gene)
-    subgraph_genes = set([G.nodes[n].get('gene_symbol', str(n)).upper() for n in subgraph.nodes()])
-    affected_pathways = pathway_map[pathway_map['gene_symbol'].isin(subgraph_genes)]
-    pathway_counts = affected_pathways['pathway_name'].value_counts().head(10)
-    if not pathway_counts.empty:
-        plt.figure(figsize=(10, 6))
-        pathway_counts.plot(kind='barh')
-        plt.xlabel('Number of genes in subgraph')
-        plt.title('Top Pathways affected by Siltuximab perturbation')
+        
+    target_symbol = siltuximab_targets[0].upper() # Ex: "IL6"
+    
+    # Busca o ID real do nó usando o mapa
+    target_node_id = symbol_to_id.get(target_symbol)
+    
+    if target_node_id and target_node_id in G:
+        print(f"Target found: {target_symbol} -> Node ID: {target_node_id}")
+        
+        # Build 2-hop subgraph usando o ID correto
+        subgraph_nodes = set([target_node_id])
+        for neighbor in G.neighbors(target_node_id):
+            subgraph_nodes.add(neighbor)
+        for neighbor in list(subgraph_nodes):
+            for second_neighbor in G.neighbors(neighbor):
+                subgraph_nodes.add(second_neighbor)
+        subgraph = G.subgraph(subgraph_nodes).copy()
+        
+        print(f"Subgraph size: {subgraph.number_of_nodes()} nodes, {subgraph.number_of_edges()} edges")
+        
+        # Visualize
+        plt.figure(figsize=(12, 10))
+        pos = nx.spring_layout(subgraph, k=0.5, iterations=50, seed=RANDOM_SEED)
+        
+        # Cores: Destacar o alvo
+        node_colors = ['red' if node == target_node_id else 'lightblue' for node in subgraph.nodes()]
+        node_sizes = [3000 if node == target_node_id else 500 for node in subgraph.nodes()]
+        
+        # Labels: Usar o gene_symbol para plotar, não o ID feio do STRING
+        labels = {}
+        for node in subgraph.nodes():
+            labels[node] = G.nodes[node].get('gene_symbol', str(node))
+
+        nx.draw_networkx_nodes(subgraph, pos, node_color=node_colors, node_size=node_sizes, alpha=0.8)
+        nx.draw_networkx_edges(subgraph, pos, alpha=0.3)
+        nx.draw_networkx_labels(subgraph, pos, labels=labels, font_size=8, font_weight='bold')
+        
+        plt.title(f"Subgrafo 2-hop ao redor do alvo ({target_symbol})", fontsize=14)
+        plt.axis('off')
         plt.tight_layout()
-        plt.savefig(RESULTS_DIR / "siltuximab_pathways.png", dpi=300)
+        plt.savefig(RESULTS_DIR / "siltuximab_subgraph.png", dpi=300)
         plt.close()
-    # Compute some centrality stats
-    deg_centrality = nx.degree_centrality(G).get(target_node, np.nan)
-    betw = nx.betweenness_centrality(G).get(target_node, np.nan)
-    stats_out = {
-        'target': target_node,
-        'nodes': subgraph.number_of_nodes(),
-        'edges': subgraph.number_of_edges(),
-        'avg_degree': (sum(dict(subgraph.degree()).values()) / subgraph.number_of_nodes()) if subgraph.number_of_nodes()>0 else np.nan,
-        'degree_centrality': deg_centrality,
-        'betweenness': betw,
-        'top_pathways': pathway_counts.head(5).to_dict() if not pathway_counts.empty else {}
-    }
-    # Print summary
-    print("\n=== CASE STUDY: SILTUXIMAB ===")
-    for k,v in stats_out.items():
-        print(f"  - {k}: {v}")
-    return stats_out
+        
+        # Stats básicas
+        deg = nx.degree_centrality(G).get(target_node_id, 0)
+        bet = nx.betweenness_centrality(G).get(target_node_id, 0) # Cuidado: isso pode demorar no grafo inteiro
+        # Se betweenness demorar muito, remova a linha acima ou calcule apenas no subgrafo (embora seja metricamente diferente)
+        
+        print(f"Stats for {target_symbol}: Degree Centrality={deg:.4f}")
+        return {'target': target_symbol, 'nodes': subgraph.number_of_nodes()}
+        
+    else:
+        print(f"Target node {target_symbol} (ID: {target_node_id}) not found in graph keys.")
+        return None
 
 
 # ---------- SECTION 8: ROC & PRECISION-RECALL CURVES ----------
@@ -291,8 +406,13 @@ def siltuximab_case_study(ppi_graph_path="data/processed/ppi_tumor_network.graph
 def roc_pr_analysis(netcandrug_path="data/processed/final_drug_ranking.csv",
                     baseline_expr_path=RESULTS_DIR / "baseline_expression_ranking.csv"):
     print("\n[ROC/PR] Computing ROC and Precision-Recall curves...")
+    
+    # Load and clean NetCanDrug
     netcandrug = pd.read_csv(netcandrug_path)
+    netcandrug['drug_name'] = normalize_drug_names(netcandrug['drug_name'])
+    netcandrug = recalculate_score_without_clinical(netcandrug)
     baseline_expr = pd.read_csv(baseline_expr_path)
+    nc_score_col = 'Validation_Score'
     for df in [netcandrug, baseline_expr]:
         if 'drug_name' in df.columns:
             df['drug_name'] = normalize_drug_names(df['drug_name'])
@@ -332,6 +452,35 @@ def roc_pr_analysis(netcandrug_path="data/processed/final_drug_ranking.csv",
     ap_nc = average_precision_score(nc_al['y_true'], nc_al['y_score'])
     precision_bl, recall_bl, _ = precision_recall_curve(bl_al['y_true'], bl_al['y_score'])
     ap_bl = average_precision_score(bl_al['y_true'], bl_al['y_score'])
+    
+    # --- INICIO DA MODIFICAÇÃO BOOTSTRAP ---
+    n_boot = 2000
+    boot_aucs = []
+    boot_aps = []
+    
+    # Converter para array numpy evita erros no resample
+    y_true_arr = nc_al['y_true'].values
+    y_score_arr = nc_al['y_score'].values
+    
+    rng = np.random.RandomState(42) # Seed fixa para o bootstrap
+    
+    for i in range(n_boot):
+        # Reamostragem com reposição (mantendo proporção de classes se possível, ou simples)
+        y_true_b, y_score_b = resample(y_true_arr, y_score_arr, replace=True, random_state=rng)
+        
+        # Só calcula se houver pelo menos uma classe positiva e uma negativa
+        if len(np.unique(y_true_b)) < 2:
+            continue
+            
+        # Calcula métricas da amostra
+        boot_aucs.append(roc_auc_score(y_true_b, y_score_b))
+        boot_aps.append(average_precision_score(y_true_b, y_score_b))
+        
+    # Calcular Intervalos de Confiança (2.5% e 97.5%)
+    auc_lower, auc_upper = np.percentile(boot_aucs, [2.5, 97.5])
+    ap_lower, ap_upper = np.percentile(boot_aps, [2.5, 97.5])
+    # --- FIM DA MODIFICAÇÃO ---
+    
     # Plot
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     ax = axes[0]
@@ -352,7 +501,8 @@ def roc_pr_analysis(netcandrug_path="data/processed/final_drug_ranking.csv",
     plt.close()
     # Print summary metrics
     print("\nROC / PR summary:")
-    print(f"NetCanDrug: AUC={auc_nc:.4f}, AP={ap_nc:.4f}")
+    print(f"NetCanDrug AUC: {auc_nc:.3f} (95% CI: {auc_lower:.3f}-{auc_upper:.3f})")
+    print(f"NetCanDrug AP:  {ap_nc:.3f} (95% CI: {ap_lower:.3f}-{ap_upper:.3f})")
     print(f"Baseline:    AUC={auc_bl:.4f}, AP={ap_bl:.4f}")
     print(f"Improvement AUC: {((auc_nc/auc_bl - 1)*100) if auc_bl>0 else np.nan:.1f}%")
     print(f"Improvement AP:  {((ap_nc/ap_bl - 1)*100) if ap_bl>0 else np.nan:.1f}%")
@@ -365,6 +515,10 @@ def distribution_and_statistics(final_ranking_path=config.FINAL_RANKING_FILE):
     df = pd.read_csv(final_ranking_path)
     df['drug_name'] = normalize_drug_names(df.get('drug_name', pd.Series(dtype=str)))
     df['is_fda_approved'] = df['drug_name'].isin(FDA_BREAST_DRUGS)
+    
+    # Recalcular score limpo para plotagem
+    df = recalculate_score_without_clinical(df)
+    score_col = 'Validation_Score' # Usar esta variável no plot
     
     # Ensure component columns
     components = ['topology_score_norm', 'pathway_score_norm', 'expression_score_norm']
@@ -379,14 +533,14 @@ def distribution_and_statistics(final_ranking_path=config.FINAL_RANKING_FILE):
     
     # --- A: Histograma ---
     ax = axes[0,0]
-    if 'NetCanDrug_Score' in df.columns:
-        other_scores = df[~df['is_fda_approved']]['NetCanDrug_Score'].dropna()
-        fda_scores = df[df['is_fda_approved']]['NetCanDrug_Score'].dropna()
-        ax.hist(other_scores, bins=50, alpha=0.7, label='Other drugs', color=c_other)
-        ax.hist(fda_scores, bins=20, alpha=0.9, label='FDA-approved', color=c_fda)
-        
-        perc_95 = df['NetCanDrug_Score'].quantile(0.95)
-        ax.axvline(perc_95, linestyle='--', color='black', label='95th percentile')
+    # Substituir 'NetCanDrug_Score' por score_col
+    other_scores = df[~df['is_fda_approved']][score_col].dropna()
+    fda_scores = df[df['is_fda_approved']][score_col].dropna()
+    ax.hist(other_scores, bins=50, alpha=0.7, label='Other drugs', color=c_other)
+    ax.hist(fda_scores, bins=20, alpha=0.9, label='FDA-approved', color=c_fda)
+    
+    perc_95 = df[score_col].quantile(0.95)
+    ax.axvline(perc_95, linestyle='--', color='black', label='95th percentile')
         
     ax.set_xlabel('NetCanDrug Score')
     ax.set_ylabel('Frequency')
@@ -451,8 +605,9 @@ def distribution_and_statistics(final_ranking_path=config.FINAL_RANKING_FILE):
 
     # --- D: CDF ---
     ax = axes[1,1]
-    fda_scores_sorted = np.sort(df[df['is_fda_approved']]['NetCanDrug_Score'].dropna())
-    other_scores_sorted = np.sort(df[~df['is_fda_approved']]['NetCanDrug_Score'].dropna())
+    # Substituir 'NetCanDrug_Score' por score_col
+    fda_scores_sorted = np.sort(df[df['is_fda_approved']][score_col].dropna())
+    other_scores_sorted = np.sort(df[~df['is_fda_approved']][score_col].dropna())
     
     if len(fda_scores_sorted)>0:
         ax.plot(fda_scores_sorted, np.linspace(0,1,len(fda_scores_sorted)), label='FDA-approved', color=c_fda, linewidth=2.5)
@@ -477,57 +632,73 @@ def distribution_and_statistics(final_ranking_path=config.FINAL_RANKING_FILE):
 # ---------- SECTION 10: HYPERGEOMETRIC & FDA VALIDATION ----------
 
 def hypergeom_fda_validation(final_ranking_path=config.FINAL_RANKING_FILE):
-    print("\n[HYPERGEOMETRIC] Validation vs FDA-approved list")
+    print("\n[HYPERGEOMETRIC] Validation vs FULL FDA-approved list")
+    
     df = pd.read_csv(final_ranking_path)
+    # Recalcula se necessário (conforme discutimos antes)
+    if 'Validation_Score' not in df.columns:
+        df = recalculate_score_without_clinical(df)
+        
     df['drug_name'] = normalize_drug_names(df.get('drug_name', pd.Series(dtype=str)))
+    df = df.sort_values('Validation_Score', ascending=False)
+    
     total_drugs = df.shape[0]
-    total_fda = len(FDA_BREAST_DRUGS)
-    K_VALUES = [10,20,30,50,100]
+    total_fda = len(FDA_BREAST_DRUGS) # Conjunto COMPLETO
+    
     results = []
-    for k in K_VALUES:
+    for k in [10, 20, 30, 50, 100]:
         top_k = df.head(k)['drug_name'].tolist()
         hits = [d for d in top_k if d in FDA_BREAST_DRUGS]
         hits_count = len(hits)
         precision = hits_count / k
-        recall = hits_count / total_fda if total_fda>0 else 0
-        f1 = 2 * precision * recall / (precision + recall) if (precision+recall)>0 else 0.0
+        recall = hits_count / total_fda if total_fda > 0 else 0
+        
+        # Teste estatístico
         pval = hypergeom.sf(hits_count - 1, total_drugs, total_fda, k)
+        
         results.append({
-            'K': k, 'Precision': round(precision,4), 'Recall': round(recall,4),
-            'F1': round(f1,4), 'Hits': hits_count, 'p_value': f"{pval:.2e}", 'Hit_Drugs': ", ".join(hits[:5])
+            'Metric_Type': 'Full FDA List',  # <--- NOVA COLUNA
+            'K': k, 
+            'Precision': round(precision, 4), 
+            'Recall': round(recall, 4),
+            'Hits': hits_count, 
+            'p_value': f"{pval:.2e}"
         })
+        
     results_df = pd.DataFrame(results)
-    results_df.to_csv(RESULTS_DIR / "validation_fda_results.csv", index=False)
+    results_df.to_csv(RESULTS_DIR / "validation_full_fda.csv", index=False)
     print(results_df.to_string(index=False))
     return results_df
 
 
-# ---------- SECTION 11: EXTRA PERMUTATION VARIANT (SAVED) ----------
-
-def permutation_and_save(final_ranking_path=config.FINAL_RANKING_FILE, n_perm=1000, top_k=20):
-    print("\n[PERMUTATION SAVED] Running permutation test and saving summary...")
-    df = pd.read_csv(final_ranking_path)
-    df['drug_name'] = normalize_drug_names(df.get('drug_name', pd.Series(dtype=str)))
-    all_drugs = df['drug_name'].unique()
-    random_precisions = []
-    for i in range(n_perm):
-        shuffled = np.random.choice(all_drugs, top_k, replace=False)
-        hits = len(set(shuffled).intersection(FDA_BREAST_DRUGS))
-        random_precisions.append(hits / top_k)
-    random_precisions = np.array(random_precisions)
-    mean_r = random_precisions.mean(); std_r = random_precisions.std()
-    # calculate model precision@20
-    topk = df.head(top_k)['drug_name'].tolist()
-    model_hits = len([d for d in topk if d in FDA_BREAST_DRUGS])
-    model_precision = model_hits / top_k
-    p_val_emp = (random_precisions >= model_precision).sum() / n_perm
-    out = pd.DataFrame({
-        "Metric": ["Model_Precision@20", "Random_Mean", "Random_STD", "Fold_Improvement", "P_value_Empirical"],
-        "Value": [model_precision, mean_r, std_r, model_precision/mean_r if mean_r>0 else np.inf, p_val_emp]
-    })
-    out.to_csv(RESULTS_DIR / "baseline_random_permutation.csv", index=False)
-    print(out.to_string(index=False))
-    return out
+def check_seed_sensitivity(df_ranking, fda_list, n_seeds=50):
+    print(f"\n[ROBUSTNESS] Checking stability across {n_seeds} random splits...")
+    precisions = []
+    
+    # Garante que temos o score final
+    df = df_ranking.copy()
+    if 'Validation_Score' not in df.columns:
+        df = recalculate_score_without_clinical(df)
+    df = df.sort_values('Validation_Score', ascending=False)
+    
+    for i in range(n_seeds):
+        # Muda a seed do split a cada iteração (i)
+        _, test_drugs_iter = train_test_split(fda_list, test_size=0.4, random_state=i)
+        
+        # Normaliza nomes
+        test_set = set([d.upper().replace(r'[^A-Z0-9]', '') for d in test_drugs_iter])
+        
+        # Calcula Precision@20 para esse split específico
+        top_20 = df.head(20)
+        hits = top_20['drug_name'].isin(test_set).sum()
+        precisions.append(hits / 20)
+        
+    mean_p = np.mean(precisions)
+    std_p = np.std(precisions)
+    
+    print(f"Precision@20 Stability: {mean_p:.3f} ± {std_p:.3f}")
+    print(f"Min: {np.min(precisions):.3f}, Max: {np.max(precisions):.3f}")
+    return mean_p, std_p
 
 
 # ---------- MAIN ----------
@@ -536,27 +707,48 @@ def main():
     print("="*80)
     print("NETCANDRUG CONSOLIDATED VALIDATION SUITE")
     print("="*80)
+    
     # Load core data
     df_ranking, df_drug_targets, df_deg = load_data()
+    
+    # Check seed sensitivity for robustness
+    check_seed_sensitivity(df_ranking, FDA_BREAST_DRUGS_LIST)
+    
     # Validation (train/test held-out)
     train_drugs, test_drugs, test_results_df = train_test_validation(df_ranking, FDA_BREAST_DRUGS_LIST)
+    
     # Ablation (uses df_ranking and is_test_fda column from earlier)
     # ensure is_test_fda exists
     if 'is_test_fda' not in df_ranking.columns:
         df_ranking['is_test_fda'] = df_ranking['drug_name'].isin(test_drugs)
     ablation_df = ablation_study(df_ranking)
+    
     # Baseline expression ranking and baseline precision on test set
     baseline_expr_df, baseline_precision_20 = compute_baseline_expression(df_drug_targets, df_deg, test_drugs=[d.upper() for d in test_drugs])
-    # Random permutation test
-    random_precisions, mean_random, std_random = random_permutation_test(df_ranking, test_drugs=[d.upper() for d in test_drugs], n_iter=1000, top_k=20)
-    netcandrug_p20 = float(test_results_df[test_results_df['K']==20]['Precision'].values[0])
-    p_value_empirical = (random_precisions >= netcandrug_p20).sum() / len(random_precisions)
+    
+    # Use the unified permutation test function
+    perm_results_heldout = run_permutation_test(
+        df_ranking, 
+        target_drug_list=test_drugs,
+        mode_label='Held-Out',
+        n_iter=10000,
+        top_k=20
+    )
+    
+    # Extract values for backwards compatibility
+    mean_random = perm_results_heldout.iloc[0]['Random_Mean']
+    std_random = perm_results_heldout.iloc[0]['Random_Std']
+    netcandrug_p20 = perm_results_heldout.iloc[0]['Model_Precision']
+    p_value_empirical = perm_results_heldout.iloc[0]['Empirical_p_value']
+    
     print(f"\nRandom mean: {mean_random:.4f} ± {std_random:.4f}")
     print(f"NetCanDrug Precision@20: {netcandrug_p20:.3f}")
     print(f"Fold improvement: {netcandrug_p20/mean_random:.1f}x")
     print(f"Empirical p-value: {p_value_empirical:.4f}")
+    
     # Final comparison table
     comparison_df = generate_final_comparison(netcandrug_p20, baseline_precision_20 if baseline_precision_20 is not None else 0.0, mean_random)
+    
     # Save validation report text
     report_path = RESULTS_DIR / "validation_report.txt"
     with open(report_path, "w") as f:
@@ -576,39 +768,57 @@ def main():
             f.write(f"   Fold improvement over baseline: {netcandrug_p20/baseline_precision_20:.1f}x\n\n")
         f.write("="*80 + "\n")
     print("\nReport saved to:", report_path)
+    
     # Case study
     try:
         siltuximab_stats = siltuximab_case_study()
     except Exception as e:
         print("Siltuximab case study failed:", e)
         siltuximab_stats = None
-    # ROC / PR
+    
+    # ROC / PR (now includes bootstrap analysis)
     try:
         roc_stats = roc_pr_analysis()
     except Exception as e:
         print("ROC/PR analysis failed:", e)
         roc_stats = None
+    
     # Distributional stats
     try:
         stats_summary = distribution_and_statistics()
     except Exception as e:
         print("Distributional analysis failed:", e)
         stats_summary = None
+    
     # Hypergeom FDA validation
     try:
         hyper_df = hypergeom_fda_validation()
     except Exception as e:
         print("Hypergeom FDA validation failed:", e)
         hyper_df = None
-    # Extra permutation summary saved
+    
+    # Run permutation test for Full FDA list
     try:
-        perm_out = permutation_and_save()
+        perm_results_full_fda = run_permutation_test(
+            df_ranking,
+            target_drug_list=FDA_BREAST_DRUGS_LIST,
+            mode_label='Full_FDA',
+            n_iter=10000,
+            top_k=20
+        )
+        
+        # Save all permutation results
+        all_perm_results = pd.concat([perm_results_heldout, perm_results_full_fda], ignore_index=True)
+        all_perm_results.to_csv(RESULTS_DIR / "permutation_tests.csv", index=False)
+        print("Permutation test results saved to permutation_tests.csv")
+        
     except Exception as e:
-        print("Permutation saved variant failed:", e)
-        perm_out = None
+        print("Full FDA permutation test failed:", e)
+    
     print("\n✅ All requested analyses attempted. Check the results/ directory for CSVs, PNGs and the report.")
     print("="*80)
 
 
 if __name__ == "__main__":
     main()
+
