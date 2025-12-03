@@ -94,9 +94,9 @@ def recalculate_score_without_clinical(df: pd.DataFrame):
         
     # Validation Weights (Must sum to 1.0 or be consistent with Ablation 'Full Model')
     # Ajuste estes pesos conforme sua configuração 'Full Model' na Ablation
-    W_TOPO = 0.60
-    W_PATH = 0.25
-    W_EXPR = 0.15
+    W_TOPO = 0.45
+    W_PATH = 0.40
+    W_EXPR = 0.05
     
     df['Validation_Score'] = (
         W_TOPO * df['topology_score_norm'] +
@@ -171,7 +171,7 @@ def ablation_study(df_ranking: pd.DataFrame):
     ensure_df_column(df, 'pathway_score_norm', 0.0)
     ensure_df_column(df, 'expression_score_norm', 0.0)
     configurations = {
-        'Full Model': {'w_topo': 0.60, 'w_path': 0.25, 'w_expr': 0.15},
+        'Full Model': {'w_topo': 0.45, 'w_path': 0.40, 'w_expr': 0.05},
         'No Topology': {'w_topo': 0.00, 'w_path': 0.60, 'w_expr': 0.40},
         'No Pathway': {'w_topo': 0.65, 'w_path': 0.00, 'w_expr': 0.35},
         'No Expression': {'w_topo': 0.55, 'w_path': 0.45, 'w_expr': 0.00},
