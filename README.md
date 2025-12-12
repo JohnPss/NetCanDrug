@@ -8,6 +8,13 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![R 4.2+](https://img.shields.io/badge/R-4.2+-blue.svg)](https://www.r-project.org/)
 [![DOI](https://img.shields.io/badge/DOI-10.xxxx%2Fxxxxxx-blue)](https://doi.org/10.xxxx/xxxxxx)
+[![Bioconductor: TCGAbiolinks](https://img.shields.io/badge/Bioconductor-TCGAbiolinks-3f51b5)](https://bioconductor.org/packages/TCGAbiolinks)
+[![Bioconductor: edgeR](https://img.shields.io/badge/Bioconductor-edgeR-3f51b5)](https://bioconductor.org/packages/edgeR)
+[![Data: STRING](https://img.shields.io/badge/Data-STRING-db-orange)](https://string-db.org/)
+[![Data: DGIdb](https://img.shields.io/badge/Data-DGIdb-0a0a0a)](https://www.dgidb.org/)
+[![Data: Reactome](https://img.shields.io/badge/Data-Reactome-006699)](https://reactome.org/)
+[![Graphs: NetworkX](https://img.shields.io/badge/Graphs-NetworkX-3776ab)](https://networkx.org/)
+[![Graphs: igraph](https://img.shields.io/badge/Graphs-igraph-1f8acb)](https://igraph.org/)
 
 **NetCanDrug** é um framework computacional que integra topologia de redes PPI, desregulação de vias biológicas e expressão gênica diferencial para priorização racional de fármacos em câncer.
 
