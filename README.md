@@ -10,7 +10,7 @@
 [![DOI](https://img.shields.io/badge/DOI-10.xxxx%2Fxxxxxx-blue)](https://doi.org/10.xxxx/xxxxxx)
 [![Bioconductor: TCGAbiolinks](https://img.shields.io/badge/Bioconductor-TCGAbiolinks-3f51b5)](https://bioconductor.org/packages/TCGAbiolinks)
 [![Bioconductor: edgeR](https://img.shields.io/badge/Bioconductor-edgeR-3f51b5)](https://bioconductor.org/packages/edgeR)
-[![Data: STRING](https://img.shields.io/badge/Data-STRING-db-orange)](https://string-db.org/)
+[![Data: STRING](https://img.shields.io/badge/Data-STRING-orange)](https://string-db.org/)
 [![Data: DGIdb](https://img.shields.io/badge/Data-DGIdb-0a0a0a)](https://www.dgidb.org/)
 [![Data: Reactome](https://img.shields.io/badge/Data-Reactome-006699)](https://reactome.org/)
 [![Graphs: NetworkX](https://img.shields.io/badge/Graphs-NetworkX-3776ab)](https://networkx.org/)
