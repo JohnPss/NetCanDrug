@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "Se você usar este software, por favor cite nosso artigo."
+title: "NetCanDrug: Network-based Drug Repositioning for Breast Cancer"
+version: 1.0.0
+date-released: 2025-01-15
+repository-code: "https://github.com/JohnPss/NetCanDrug"
+license: MIT
+
+authors:
+  - family-names: Siqueira
+    given-names: João Pedro Silva
+    email: joaopedrosilvasiqueira1@gmail.com
+    affiliation: "Centro Federal de Educação Tecnológica de Minas Gerais (CEFET-MG)"
+    
+  - family-names: Romualdo
+    given-names: João Vitor Lobato
+    email: joaovitorlobatoromualdo16@gmail.com
+    affiliation: "Centro Federal de Educação Tecnológica de Minas Gerais (CEFET-MG)"
+
+preferred-citation:
+  type: article
+  title: "NetCanDrug: Uma Abordagem Baseada em Redes Complexas para Reposicionamento de Fármacos em Câncer de Mama"
+  authors:
+    - family-names: Siqueira
+      given-names: João Pedro Silva
+    - family-names: Romualdo
+      given-names: João Vitor Lobato
+  journal: "Journal Name"
+  year: 2025
+  # Adicione quando publicado:
+  # doi: 10.xxxx/xxxxx
