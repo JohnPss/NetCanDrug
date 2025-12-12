@@ -8,8 +8,10 @@ data/uniprot_ids_genesymbol.txt
 data/*_large.*
 data/*.txt
 data/*.tsv
-data/raw
-data/processed
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
 results/*
 
 
