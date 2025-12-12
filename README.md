@@ -1,7 +1,7 @@
 # NetCanDrug
 
 <p align="center">
-    <img src="assets/image.png" alt="NetCanDrug" width="420" />
+    <img src="assets/image.png" alt="NetCanDrug" width="600" />
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
