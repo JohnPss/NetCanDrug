@@ -1,5 +1,9 @@
 # NetCanDrug
 
+<p align="center">
+    <img src="assets/image.png" alt="NetCanDrug" width="420" />
+</p>
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![R 4.2+](https://img.shields.io/badge/R-4.2+-blue.svg)](https://www.r-project.org/)
