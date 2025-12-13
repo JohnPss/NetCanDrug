@@ -45,7 +45,7 @@ temp/
 cache/
 logs/
 *.log
-*.sh
+
 
 venv/
 env/
